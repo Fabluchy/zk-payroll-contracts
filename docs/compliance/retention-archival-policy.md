@@ -98,9 +98,12 @@ Once settlement completes and the hold is cleared, normal retention rules apply
 again. The hold stores only a boolean flag — never salary amounts, employee
 addresses, or commitment values.
 
-Upgrade note: `RetentionRecord` gained a `settlement_pending` field. Records
-written by an earlier contract version must be re-registered (or migrated)
-after this upgrade, since their stored layout cannot be deserialized.
+Upgrade note: `RetentionRecord` gained a `settlement_pending: Option<bool>`
+field at the end of the struct. This follows the append-safe rule in
+[`docs/upgrades.md`](../upgrades.md): records written by an earlier contract
+version decode with `None`, which reads as "no hold", so they remain prunable
+under the normal window. New records start as `None`; the admin setter writes
+`Some(true)` / `Some(false)`.
 
 ## Storage Implications
 

@@ -108,10 +108,15 @@ pub struct RetentionRecord {
     pub audit_block: bool,
     /// True when an open challenge/dispute protects this record.
     pub challenge_block: bool,
-    /// True when settlement for this record is still pending. A pending
-    /// settlement protects the record from pruning because removing it could
-    /// destroy the only evidence needed to finish reconciliation.
-    pub settlement_pending: bool,
+    /// `Some(true)` when settlement for this record is still pending. A
+    /// pending settlement protects the record from pruning because removing it
+    /// could destroy the only evidence needed to finish reconciliation.
+    /// `None` (records registered before this field existed) and
+    /// `Some(false)` both mean no hold.
+    ///
+    /// `Option<bool>` keeps the struct append-safe: records written by an
+    /// earlier contract version decode with `None`, per `docs/upgrades.md`.
+    pub settlement_pending: Option<bool>,
     /// True when this record has been pruned (tombstone entry retained briefly).
     pub pruned: bool,
 }
@@ -208,7 +213,7 @@ impl RetentionManagerContract {
             eligible_after: now + window,
             audit_block: false,
             challenge_block: false,
-            settlement_pending: false,
+            settlement_pending: None,
             pruned: false,
         };
 
@@ -308,7 +313,7 @@ impl RetentionManagerContract {
     ///   3. `now >= eligible_after` (retention window elapsed).
     ///   4. `audit_block == false`.
     ///   5. `challenge_block == false`.
-    ///   6. `settlement_pending == false`.
+    ///   6. `settlement_pending != Some(true)`.
     ///
     /// On success, the record is marked as pruned (tombstoned) and a
     /// `RetentionPruned` event is emitted for off-chain archive systems.
@@ -346,7 +351,7 @@ impl RetentionManagerContract {
         if entry.challenge_block {
             return Err(RetentionError::ActiveChallengeBlock);
         }
-        if entry.settlement_pending {
+        if entry.settlement_pending == Some(true) {
             return Err(RetentionError::SettlementPending);
         }
 
@@ -422,7 +427,7 @@ impl RetentionManagerContract {
                 !entry.pruned
                     && !entry.audit_block
                     && !entry.challenge_block
-                    && !entry.settlement_pending
+                    && entry.settlement_pending != Some(true)
                     && env.ledger().timestamp() >= entry.eligible_after
             }
             None => false,
@@ -458,7 +463,7 @@ impl RetentionManagerContract {
         match kind {
             BlockKind::Audit => entry.audit_block = active,
             BlockKind::Challenge => entry.challenge_block = active,
-            BlockKind::Settlement => entry.settlement_pending = active,
+            BlockKind::Settlement => entry.settlement_pending = Some(active),
         }
         env.storage().persistent().set(&key, &entry);
 
@@ -701,9 +706,15 @@ mod tests {
         let record_id = 70u64;
 
         let record = client.register_record(&company_id, &record_id, &RecordType::FinalizedBatch);
-        assert!(!record.settlement_pending);
+        assert_eq!(record.settlement_pending, None);
 
-        client.set_settlement_pending(&company_id, &record_id, &RecordType::FinalizedBatch, &true);
+        let held = client.set_settlement_pending(
+            &company_id,
+            &record_id,
+            &RecordType::FinalizedBatch,
+            &true,
+        );
+        assert_eq!(held.settlement_pending, Some(true));
 
         // Window elapsed, no audit or challenge block — settlement alone must block.
         env.ledger()
