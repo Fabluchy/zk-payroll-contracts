@@ -1152,6 +1152,65 @@ pub fn emit_payroll_period_closed(e: &Env, period_label: Symbol, closed_by: Addr
     );
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Retention Manager Events — Issue #321
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Emitted when the retention manager contract is initialized.
+pub fn emit_retention_manager_initialized(e: &Env, admin: Address) {
+    e.events()
+        .publish((Symbol::new(e, "RetentionInit"),), (admin,));
+}
+
+/// Emitted when a record is registered for retention tracking.
+///
+/// `eligible_after` is the Unix timestamp after which pruning becomes allowed.
+pub fn emit_retention_record_registered(
+    e: &Env,
+    company_id: u64,
+    record_id: u64,
+    record_type: Symbol,
+    eligible_after: u64,
+) {
+    e.events().publish(
+        (Symbol::new(e, "RetentionRegistered"), company_id),
+        (record_id, record_type, eligible_after),
+    );
+}
+
+/// Emitted when an audit, challenge, or settlement hold flag changes.
+///
+/// `block_type` is one of `"audit"`, `"challenge"` or `"settlement"`.
+pub fn emit_retention_block_changed(
+    e: &Env,
+    company_id: u64,
+    record_id: u64,
+    block_type: Symbol,
+    blocked: bool,
+) {
+    e.events().publish(
+        (Symbol::new(e, "RetentionBlockChanged"), company_id),
+        (record_id, block_type, blocked),
+    );
+}
+
+/// Emitted when a record is successfully pruned.
+///
+/// Off-chain archive systems should subscribe to this event to trigger
+/// archival workflows before storage is considered released.
+pub fn emit_retention_record_pruned(
+    e: &Env,
+    company_id: u64,
+    record_id: u64,
+    record_type: Symbol,
+    pruned_at: u64,
+) {
+    e.events().publish(
+        (Symbol::new(e, "RetentionPruned"), company_id),
+        (record_id, record_type, pruned_at),
+    );
+}
+
 #[cfg(test)]
 mod privacy_safe_schema_tests {
     use super::{
