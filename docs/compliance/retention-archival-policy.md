@@ -98,6 +98,10 @@ Once settlement completes and the hold is cleared, normal retention rules apply
 again. The hold stores only a boolean flag — never salary amounts, employee
 addresses, or commitment values.
 
+Upgrade note: `RetentionRecord` gained a `settlement_pending` field. Records
+written by an earlier contract version must be re-registered (or migrated)
+after this upgrade, since their stored layout cannot be deserialized.
+
 ## Storage Implications
 
 ### On-Chain Storage

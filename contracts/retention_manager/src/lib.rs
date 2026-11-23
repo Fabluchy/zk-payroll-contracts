@@ -137,6 +137,23 @@ pub enum DataKey {
 // Contract
 // ---------------------------------------------------------------------------
 
+/// Safety hold that can be applied to a retained record.
+enum BlockKind {
+    Audit,
+    Challenge,
+    Settlement,
+}
+
+impl BlockKind {
+    fn symbol(&self, env: &Env) -> Symbol {
+        match self {
+            BlockKind::Audit => Symbol::new(env, "audit"),
+            BlockKind::Challenge => Symbol::new(env, "challenge"),
+            BlockKind::Settlement => Symbol::new(env, "settlement"),
+        }
+    }
+}
+
 #[contract]
 pub struct RetentionManagerContract;
 
@@ -225,28 +242,14 @@ impl RetentionManagerContract {
         record_type: RecordType,
         blocked: bool,
     ) -> Result<RetentionRecord, RetentionError> {
-        Self::require_not_paused(&env);
-        Self::require_admin(&env);
-
-        let key = Self::record_key(company_id, record_id, &record_type);
-        let mut entry: RetentionRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(RetentionError::RecordNotFound)?;
-
-        entry.audit_block = blocked;
-        env.storage().persistent().set(&key, &entry);
-
-        payroll_events::emit_retention_block_changed(
-            &env,
+        Self::set_block(
+            env,
             company_id,
             record_id,
-            Symbol::new(&env, "audit"),
+            record_type,
+            BlockKind::Audit,
             blocked,
-        );
-
-        Ok(entry)
+        )
     }
 
     /// Set or clear the challenge block on a retention record.
@@ -260,28 +263,14 @@ impl RetentionManagerContract {
         record_type: RecordType,
         blocked: bool,
     ) -> Result<RetentionRecord, RetentionError> {
-        Self::require_not_paused(&env);
-        Self::require_admin(&env);
-
-        let key = Self::record_key(company_id, record_id, &record_type);
-        let mut entry: RetentionRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(RetentionError::RecordNotFound)?;
-
-        entry.challenge_block = blocked;
-        env.storage().persistent().set(&key, &entry);
-
-        payroll_events::emit_retention_block_changed(
-            &env,
+        Self::set_block(
+            env,
             company_id,
             record_id,
-            Symbol::new(&env, "challenge"),
+            record_type,
+            BlockKind::Challenge,
             blocked,
-        );
-
-        Ok(entry)
+        )
     }
 
     /// Set or clear the settlement-pending hold on a retention record.
@@ -297,28 +286,14 @@ impl RetentionManagerContract {
         record_type: RecordType,
         pending: bool,
     ) -> Result<RetentionRecord, RetentionError> {
-        Self::require_not_paused(&env);
-        Self::require_admin(&env);
-
-        let key = Self::record_key(company_id, record_id, &record_type);
-        let mut entry: RetentionRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(RetentionError::RecordNotFound)?;
-
-        entry.settlement_pending = pending;
-        env.storage().persistent().set(&key, &entry);
-
-        payroll_events::emit_retention_block_changed(
-            &env,
+        Self::set_block(
+            env,
             company_id,
             record_id,
-            Symbol::new(&env, "settlement"),
+            record_type,
+            BlockKind::Settlement,
             pending,
-        );
-
-        Ok(entry)
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -457,6 +432,46 @@ impl RetentionManagerContract {
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /// Apply a safety hold to a record and emit the block-change event.
+    ///
+    /// Shared by the audit, challenge, and settlement-pending setters so that
+    /// the three holds cannot drift apart.
+    fn set_block(
+        env: Env,
+        company_id: u64,
+        record_id: u64,
+        record_type: RecordType,
+        kind: BlockKind,
+        active: bool,
+    ) -> Result<RetentionRecord, RetentionError> {
+        Self::require_not_paused(&env);
+        Self::require_admin(&env);
+
+        let key = Self::record_key(company_id, record_id, &record_type);
+        let mut entry: RetentionRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RetentionError::RecordNotFound)?;
+
+        match kind {
+            BlockKind::Audit => entry.audit_block = active,
+            BlockKind::Challenge => entry.challenge_block = active,
+            BlockKind::Settlement => entry.settlement_pending = active,
+        }
+        env.storage().persistent().set(&key, &entry);
+
+        payroll_events::emit_retention_block_changed(
+            &env,
+            company_id,
+            record_id,
+            kind.symbol(&env),
+            active,
+        );
+
+        Ok(entry)
+    }
 
     fn require_admin(env: &Env) {
         let admin: Address = env
@@ -691,9 +706,8 @@ mod tests {
         client.set_settlement_pending(&company_id, &record_id, &RecordType::FinalizedBatch, &true);
 
         // Window elapsed, no audit or challenge block — settlement alone must block.
-        env.ledger().with_mut(|l| {
-            l.timestamp = l.timestamp + FINALIZED_RETENTION_SECS + 1;
-        });
+        env.ledger()
+            .with_mut(|l| l.timestamp += FINALIZED_RETENTION_SECS + 1);
 
         assert!(!client.is_eligible_for_pruning(
             &company_id,
@@ -723,9 +737,8 @@ mod tests {
         client.register_record(&company_id, &record_id, &RecordType::FinalizedBatch);
         client.set_settlement_pending(&company_id, &record_id, &RecordType::FinalizedBatch, &true);
 
-        env.ledger().with_mut(|l| {
-            l.timestamp = l.timestamp + FINALIZED_RETENTION_SECS + 1;
-        });
+        env.ledger()
+            .with_mut(|l| l.timestamp += FINALIZED_RETENTION_SECS + 1);
 
         // Settlement completes and the hold is cleared.
         client.set_settlement_pending(&company_id, &record_id, &RecordType::FinalizedBatch, &false);
